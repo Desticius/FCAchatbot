@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Validate OpenAI API key
 if not os.getenv("OPENAI_API_KEY"):
@@ -62,7 +62,7 @@ def initialize_embeddings():
             openai_api_key=os.getenv("OPENAI_API_KEY")
         )
     return embeddings
-    
+
 def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int = 50):
     try:
         loader = PyPDFLoader(pdf_path)
