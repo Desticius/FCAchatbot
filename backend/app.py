@@ -18,8 +18,8 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
 load_dotenv()
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Validate OpenAI API key
 if not os.getenv("OPENAI_API_KEY"):
@@ -296,5 +296,5 @@ async def list_documents():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", 8080))  # Cloud Run uses port 8080
+    port = int(os.getenv("PORT", 8080))  # Cloud Run uses 8080
     uvicorn.run(app, host="0.0.0.0", port=port)
