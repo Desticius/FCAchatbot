@@ -57,11 +57,12 @@ class QueryResponse(BaseModel):
 def initialize_embeddings():
     global embeddings
     if embeddings is None:
-        embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        from langchain_openai import OpenAIEmbeddings
+        embeddings = OpenAIEmbeddings(
+            openai_api_key=os.getenv("OPENAI_API_KEY")
         )
     return embeddings
-
+    
 def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int = 50):
     try:
         loader = PyPDFLoader(pdf_path)
