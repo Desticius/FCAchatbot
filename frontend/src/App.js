@@ -12,7 +12,7 @@ const FCAHandbookChat = () => {
   const fileInputRef = useRef(null);
 
   // temp localhost for development
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+  const API_BASE_URL = 'https://fcachatbot.onrender.com';
 
   useEffect(() => {
     checkSystemHealth();
