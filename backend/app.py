@@ -11,7 +11,7 @@ from langchain.chains import RetrievalQA
 from langchain_openai import ChatOpenAI
 import tempfile
 import shutil
-from typing import Optional
+from typing import Optional, List
 import logging
 
 # Configure logging
@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
+
+# Validate OpenAI API key
+if not os.getenv("OPENAI_API_KEY"):
+    logger.warning("OPENAI_API_KEY not found in environment variables")
 
 app = FastAPI(title="FCA Handbook RAG Chatbot", version="1.0.0")
 
@@ -36,6 +40,7 @@ app.add_middleware(
 vectorstore = None
 qa_chain = None
 embeddings = None
+processed_files = []  # Track uploaded files
 
 class QueryRequest(BaseModel):
     question: str
@@ -80,11 +85,42 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int 
         logger.error(f"Error creating vectorstore: {str(e)}")
         raise
 
+def add_to_vectorstore(pdf_path: str, existing_vectorstore, chunk_size: int = 300, chunk_overlap: int = 50):
+    """Add new documents to existing vectorstore"""
+    try:
+        loader = PyPDFLoader(pdf_path)
+        docs = loader.load()
+        
+        splitter = CharacterTextSplitter(
+            chunk_size=chunk_size, 
+            chunk_overlap=chunk_overlap
+        )
+        chunks = splitter.split_documents(docs)
+        
+        texts = [c.page_content for c in chunks]
+        metas = [c.metadata for c in chunks]
+        
+        # Add to existing vectorstore
+        existing_vectorstore.add_texts(texts=texts, metadatas=metas)
+        
+        logger.info(f"Added {len(chunks)} chunks to existing vectorstore")
+        return existing_vectorstore
+        
+    except Exception as e:
+        logger.error(f"Error adding to vectorstore: {str(e)}")
+        raise
+
 def create_qa_chain(vectorstore, model_name: str = "gpt-3.5-turbo", temperature: float = 0.3):
     try:
+        # Ensure API key is set
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
+        
         llm = ChatOpenAI(
             model=model_name,
-            temperature=temperature
+            temperature=temperature,
+            api_key=api_key
         )
         
         qa_chain = RetrievalQA.from_chain_type(
@@ -110,47 +146,22 @@ async def health_check():
     return {
         "status": "healthy",
         "vectorstore_initialized": vectorstore is not None,
-        "qa_chain_initialized": qa_chain is not None
+        "qa_chain_initialized": qa_chain is not None,
+        "processed_files": processed_files,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY"))
     }
-
-@app.post("/upload-pdf")
-async def upload_pdf(file: UploadFile = File(...)):
-    global vectorstore, qa_chain
-    
-    if not file.filename.endswith('.pdf'):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported")
-    
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
-            shutil.copyfileobj(file.file, tmp_file)
-            tmp_path = tmp_file.name
-        
-        vectorstore = create_vectorstore(tmp_path)
-        qa_chain = create_qa_chain(vectorstore)
-        
-        os.unlink(tmp_path)
-        
-        return {
-            "message": "PDF uploaded and processed successfully",
-            "filename": file.filename
-        }
-        
-    except Exception as e:
-        logger.error(f"Error processing PDF: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
-
 
 @app.post("/initialize-default")
 async def initialize_default():
     """Initialize with default FCA combined handbook if it exists"""
-    global vectorstore, qa_chain
+    global vectorstore, qa_chain, processed_files
     
     # Look for handbook/PDF
     possible_files = [
         "fca_combined_handbook.pdf",
         "combined_handbook.pdf", 
         "fca_handbook.pdf",
-        "sample.pdf"  
+        "sample.pdf"
     ]
     
     default_file = None
@@ -169,13 +180,16 @@ async def initialize_default():
         # Create vectorstore
         vectorstore = create_vectorstore(default_file)
         
-        
+        # Create QA chain
         qa_chain = create_qa_chain(vectorstore)
+        
+        # Track processed file
+        processed_files = [default_file]
         
         logger.info(f"System initialized with default document: {default_file}")
         
         return {
-            "message": f"System initialized with FCA Combined Handbook successfully",
+            "message": "System initialized with FCA Combined Handbook successfully",
             "filename": default_file,
             "status": "ready"
         }
@@ -184,11 +198,10 @@ async def initialize_default():
         logger.error(f"Error initializing system: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error initializing system: {str(e)}")
 
-# additional documents
 @app.post("/upload-pdf")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Upload additional PDF and add to existing knowledge base"""
-    global vectorstore, qa_chain
+    """Upload PDF and add to knowledge base"""
+    global vectorstore, qa_chain, processed_files
     
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
@@ -198,19 +211,28 @@ async def upload_pdf(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, tmp_file)
             tmp_path = tmp_file.name
         
+        if vectorstore is None:
+            # First PDF - create new vectorstore
+            vectorstore = create_vectorstore(tmp_path)
+            processed_files = [file.filename]
+            message = "PDF uploaded and vectorstore created successfully"
+        else:
+            # Additional PDF - add to existing vectorstore
+            vectorstore = add_to_vectorstore(tmp_path, vectorstore)
+            processed_files.append(file.filename)
+            message = "PDF uploaded and added to existing knowledge base"
         
-        new_vectorstore = create_vectorstore(tmp_path)
-        
-        
-        vectorstore = new_vectorstore
+        # Recreate QA chain with updated vectorstore
         qa_chain = create_qa_chain(vectorstore)
         
+        # Clean up temp file
         os.unlink(tmp_path)
         
         return {
-            "message": "Additional PDF uploaded and processed successfully",
+            "message": message,
             "filename": file.filename,
-            "note": "This document has been added to the knowledge base"
+            "total_documents": len(processed_files),
+            "all_documents": processed_files
         }
         
     except Exception as e:
@@ -224,7 +246,7 @@ async def query_document(request: QueryRequest):
     if qa_chain is None:
         raise HTTPException(
             status_code=400, 
-            detail="Please upload a PDF first to initialize the system"
+            detail="Please upload a PDF or initialize with default document first"
         )
     
     try:
@@ -248,6 +270,29 @@ async def query_document(request: QueryRequest):
     except Exception as e:
         logger.error(f"Error processing query: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing query: {str(e)}")
+
+@app.delete("/clear-knowledge-base")
+async def clear_knowledge_base():
+    """Clear all uploaded documents and reset the system"""
+    global vectorstore, qa_chain, processed_files
+    
+    vectorstore = None
+    qa_chain = None
+    processed_files = []
+    
+    return {
+        "message": "Knowledge base cleared successfully",
+        "status": "reset"
+    }
+
+@app.get("/documents")
+async def list_documents():
+    """List all processed documents"""
+    return {
+        "documents": processed_files,
+        "count": len(processed_files),
+        "vectorstore_initialized": vectorstore is not None
+    }
 
 if __name__ == "__main__":
     import uvicorn
