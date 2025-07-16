@@ -19,7 +19,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-os.environ["OPENAI_API_KEY"] = "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"
 
 # Validate OpenAI API key
 if not os.getenv("OPENAI_API_KEY"):
