@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+os.environ["OPENAI_API_KEY"] = "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"
 
 # Validate OpenAI API key
 if not os.getenv("OPENAI_API_KEY"):
@@ -62,7 +63,7 @@ def initialize_embeddings():
         )
     return embeddings
 
-def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int = 50):
+def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int = 25):
     try:
         loader = PyPDFLoader(pdf_path)
         docs = loader.load()
@@ -73,9 +74,17 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int 
         )
         chunks = splitter.split_documents(docs)
         
+        # ADD THESE LINES HERE:
+        if not chunks:
+            raise ValueError("No content could be extracted from the PDF")
+        
         emb = initialize_embeddings()
-        texts = [c.page_content for c in chunks]
-        metas = [c.metadata for c in chunks]
+        texts = [c.page_content for c in chunks if c.page_content.strip()]
+        metas = [c.metadata for c in chunks if c.page_content.strip()]
+        
+        # ADD THIS LINE TOO:
+        if not texts:
+            raise ValueError("No valid text content found in PDF")
         
         vectorstore = Chroma.from_texts(
             texts=texts, 
@@ -90,7 +99,7 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 300, chunk_overlap: int 
         logger.error(f"Error creating vectorstore: {str(e)}")
         raise
 
-def add_to_vectorstore(pdf_path: str, existing_vectorstore, chunk_size: int = 300, chunk_overlap: int = 50):
+def add_to_vectorstore(pdf_path: str, existing_vectorstore, chunk_size: int = 150, chunk_overlap: int = 25):
     """Add new documents to existing vectorstore"""
     try:
         loader = PyPDFLoader(pdf_path)
