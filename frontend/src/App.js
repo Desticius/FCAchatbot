@@ -12,7 +12,7 @@ const FCAHandbookChat = () => {
   const fileInputRef = useRef(null);
 
   // temp localhost for development
-  const API_BASE_URL = 'https://fcachatbot.onrender.com';
+  const API_BASE_URL = 'https://fcachatbot-353782424888.europe-west1.run.app';
 
   useEffect(() => {
     checkSystemHealth();
@@ -46,12 +46,19 @@ const FCAHandbookChat = () => {
         setMessages(prev => [...prev, {
           id: Date.now(),
           type: 'system',
-          content: '📚 FCA Combined Handbook loaded successfully! You can now ask questions about FCA regulations and compliance requirements.',
+          content: '📚 FCA Combined Handbook loaded successfully!',
           timestamp: new Date()
         }]);
       }
     } catch (error) {
-      console.log('Default document not available, upload required');
+      // When no default document - this is normal!
+      setSystemStatus('initialized'); // Set to initialized anyway
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        type: 'system',
+        content: '📁 Ready! Upload a PDF to get started.',
+        timestamp: new Date()
+      }]);
     }
   };
 
@@ -199,8 +206,9 @@ const FCAHandbookChat = () => {
 
   const getStatusText = () => {
     switch (systemStatus) {
-      case 'initialized': return 'FCA Handbook Ready';
-      case 'not_initialized': return 'Loading FCA Handbook...';
+      case 'initialized': return 'Document Ready';
+      case 'ready_for_upload': return 'Ready - Upload PDF';
+      case 'not_initialized': return 'Loading...';
       case 'error': return 'Connection Error';
       default: return 'Loading...';
     }
