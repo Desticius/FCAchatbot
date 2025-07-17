@@ -73,7 +73,7 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int 
         )
         chunks = splitter.split_documents(docs)
         
-        # ADD THESE LINES HERE:
+        
         if not chunks:
             raise ValueError("No content could be extracted from the PDF")
         
@@ -81,7 +81,7 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int 
         texts = [c.page_content for c in chunks if c.page_content.strip()]
         metas = [c.metadata for c in chunks if c.page_content.strip()]
         
-        # ADD THIS LINE TOO:
+       
         if not texts:
             raise ValueError("No valid text content found in PDF")
         
