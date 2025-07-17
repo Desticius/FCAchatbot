@@ -13,6 +13,8 @@ import tempfile
 import shutil
 from typing import Optional, List
 import logging
+import glob
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +48,10 @@ qa_chain = None
 embeddings = None
 processed_files = []  # Track uploaded files
 
+# Define internal documents directory
+INTERNAL_DOCS_DIR = "internal_documents"
+ALLOWED_EXTENSIONS = ['.pdf', '.txt', '.docx']
+
 class QueryRequest(BaseModel):
     question: str
     
@@ -62,6 +68,72 @@ def initialize_embeddings():
         )
     return embeddings
 
+def load_internal_documents():
+    """Load all documents from the internal_documents directory"""
+    global vectorstore, processed_files
+    
+    # Create internal documents directory if it doesn't exist
+    os.makedirs(INTERNAL_DOCS_DIR, exist_ok=True)
+    
+    # Find all PDF files in the internal documents directory
+    pdf_files = glob.glob(os.path.join(INTERNAL_DOCS_DIR, "*.pdf"))
+    
+    if not pdf_files:
+        logger.warning(f"No PDF files found in {INTERNAL_DOCS_DIR} directory")
+        return False
+    
+    logger.info(f"Found {len(pdf_files)} PDF files to process")
+    
+    all_chunks = []
+    all_texts = []
+    all_metas = []
+    
+    try:
+        for pdf_path in pdf_files:
+            logger.info(f"Processing {pdf_path}")
+            
+            # Load and process each PDF
+            loader = PyPDFLoader(pdf_path)
+            docs = loader.load()
+            
+            splitter = CharacterTextSplitter(
+                chunk_size=150, 
+                chunk_overlap=25
+            )
+            chunks = splitter.split_documents(docs)
+            
+            # Add filename to metadata
+            filename = os.path.basename(pdf_path)
+            for chunk in chunks:
+                chunk.metadata['source_file'] = filename
+            
+            all_chunks.extend(chunks)
+            
+            # Track processed file
+            processed_files.append(filename)
+        
+        # Extract texts and metadata
+        all_texts = [c.page_content for c in all_chunks if c.page_content.strip()]
+        all_metas = [c.metadata for c in all_chunks if c.page_content.strip()]
+        
+        if not all_texts:
+            raise ValueError("No valid text content found in any PDF")
+        
+        # Create vectorstore with all documents
+        emb = initialize_embeddings()
+        vectorstore = Chroma.from_texts(
+            texts=all_texts, 
+            embedding=emb, 
+            metadatas=all_metas
+        )
+        
+        logger.info(f"Created vectorstore with {len(all_chunks)} chunks from {len(pdf_files)} documents")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error loading internal documents: {str(e)}")
+        return False
+
 def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int = 25):
     try:
         loader = PyPDFLoader(pdf_path)
@@ -73,7 +145,6 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int 
         )
         chunks = splitter.split_documents(docs)
         
-        
         if not chunks:
             raise ValueError("No content could be extracted from the PDF")
         
@@ -81,7 +152,6 @@ def create_vectorstore(pdf_path: str, chunk_size: int = 150, chunk_overlap: int 
         texts = [c.page_content for c in chunks if c.page_content.strip()]
         metas = [c.metadata for c in chunks if c.page_content.strip()]
         
-       
         if not texts:
             raise ValueError("No valid text content found in PDF")
         
@@ -150,6 +220,19 @@ def create_qa_chain(vectorstore, model_name: str = "gpt-3.5-turbo", temperature:
         logger.error(f"Error creating QA chain: {str(e)}")
         raise
 
+@app.on_event("startup")
+async def startup_event():
+    """Load internal documents automatically when the app starts"""
+    global qa_chain
+    
+    logger.info("Starting up - loading internal documents...")
+    
+    if load_internal_documents():
+        qa_chain = create_qa_chain(vectorstore)
+        logger.info("✅ Internal documents loaded successfully on startup")
+    else:
+        logger.info("⚠️ No internal documents found, system will wait for uploads")
+
 @app.get("/")
 async def root():
     return {"message": "FCA Handbook RAG Chatbot API", "status": "running"}
@@ -161,15 +244,52 @@ async def health_check():
         "vectorstore_initialized": vectorstore is not None,
         "qa_chain_initialized": qa_chain is not None,
         "processed_files": processed_files,
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY"))
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "internal_docs_loaded": len(processed_files) > 0
     }
+
+@app.post("/reload-internal-documents")
+async def reload_internal_documents():
+    """Reload all internal documents (useful for adding new docs without restart)"""
+    global vectorstore, qa_chain, processed_files
+    
+    # Reset current state
+    vectorstore = None
+    qa_chain = None
+    processed_files = []
+    
+    try:
+        if load_internal_documents():
+            qa_chain = create_qa_chain(vectorstore)
+            return {
+                "message": "Internal documents reloaded successfully",
+                "documents_loaded": processed_files,
+                "total_documents": len(processed_files)
+            }
+        else:
+            raise HTTPException(
+                status_code=404, 
+                detail="No documents found in internal_documents directory"
+            )
+    except Exception as e:
+        logger.error(f"Error reloading internal documents: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error reloading documents: {str(e)}")
 
 @app.post("/initialize-default")
 async def initialize_default():
     """Initialize with default FCA combined handbook if it exists"""
     global vectorstore, qa_chain, processed_files
     
-    # Look for handbook/PDF
+    # First try to load internal documents
+    if load_internal_documents():
+        qa_chain = create_qa_chain(vectorstore)
+        return {
+            "message": "System initialized with internal documents successfully",
+            "documents": processed_files,
+            "status": "ready"
+        }
+    
+    # Fallback to looking for individual files in root directory
     possible_files = [
         "fca_combined_handbook.pdf",
         "combined_handbook.pdf", 
@@ -186,7 +306,7 @@ async def initialize_default():
     if not default_file:
         raise HTTPException(
             status_code=404, 
-            detail="Default FCA handbook not found. Please upload a PDF document."
+            detail="No documents found. Please add PDFs to the 'internal_documents' directory or upload a PDF document."
         )
     
     try:
@@ -259,7 +379,7 @@ async def query_document(request: QueryRequest):
     if qa_chain is None:
         raise HTTPException(
             status_code=400, 
-            detail="Please upload a PDF or initialize with default document first"
+            detail="Please add documents to 'internal_documents' directory or upload a PDF first"
         )
     
     try:
@@ -305,6 +425,17 @@ async def list_documents():
         "documents": processed_files,
         "count": len(processed_files),
         "vectorstore_initialized": vectorstore is not None
+    }
+
+@app.get("/internal-documents-status")
+async def internal_documents_status():
+    """Check what's in the internal documents directory"""
+    internal_pdfs = glob.glob(os.path.join(INTERNAL_DOCS_DIR, "*.pdf"))
+    return {
+        "internal_documents_directory": INTERNAL_DOCS_DIR,
+        "pdf_files_found": [os.path.basename(f) for f in internal_pdfs],
+        "total_files": len(internal_pdfs),
+        "directory_exists": os.path.exists(INTERNAL_DOCS_DIR)
     }
 
 if __name__ == "__main__":

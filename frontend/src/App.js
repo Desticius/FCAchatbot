@@ -1,13 +1,15 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Upload, Send, FileText, MessageCircle, AlertCircle, CheckCircle, Loader2, Bot, User } from 'lucide-react';
+import { Upload, Send, FileText, MessageCircle, AlertCircle, CheckCircle, Loader2, Bot, User, RefreshCw } from 'lucide-react';
 
 const FCAHandbookChat = () => {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [systemStatus, setSystemStatus] = useState('not_initialized');
-  const [uploadedFile, setUploadedFile] = useState(null);
+  const [systemStatus, setSystemStatus] = useState('loading');
+  const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [internalDocsLoaded, setInternalDocsLoaded] = useState(false);
+  const [isReloading, setIsReloading] = useState(false);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -15,15 +17,7 @@ const FCAHandbookChat = () => {
   const API_BASE_URL = 'http://localhost:8080';
 
   useEffect(() => {
-    checkSystemHealth();
-    loadDefaultDocument();
-    // welcome message
-    setMessages([{
-      id: 1,
-      type: 'system',
-      content: '🏛️ Welcome to Cius\' FCA Regulations Chatbot! I have the complete FCA handbook loaded and ready. You can ask questions about FCA regulations, or upload additional documents for analysis.',
-      timestamp: new Date()
-    }]);
+    initializeSystem();
   }, []);
 
   useEffect(() => {
@@ -34,46 +28,136 @@ const FCAHandbookChat = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const loadDefaultDocument = async () => {
+  const initializeSystem = async () => {
+    setSystemStatus('loading');
+    
+    // Add initial welcome message
+    setMessages([{
+      id: 1,
+      type: 'system',
+      content: '🏛️ FCA Regulations Chatbot! Initializing system and loading documents...',
+      timestamp: new Date()
+    }]);
+
+    // Check system health and internal documents status
     try {
-      const response = await fetch(`${API_BASE_URL}/initialize-default`, {
-        method: 'POST',
-      });
-      
-      if (response.ok) {
-        setSystemStatus('initialized');
-        setUploadedFile('FCA Combined Handbook (Default)');
+      const [healthResponse, internalDocsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/health`),
+        fetch(`${API_BASE_URL}/internal-documents-status`)
+      ]);
+
+      const healthData = await healthResponse.json();
+      const internalDocsData = await internalDocsResponse.json();
+
+      if (healthData.internal_docs_loaded && healthData.vectorstore_initialized) {
+        // Internal documents are already loaded
+        setSystemStatus('ready');
+        setInternalDocsLoaded(true);
+        setUploadedFiles(healthData.processed_files || []);
+        
         setMessages(prev => [...prev, {
           id: Date.now(),
           type: 'system',
-          content: '📚 FCA Combined Handbook loaded successfully!',
+          content: `✅ System ready! Loaded ${healthData.processed_files?.length || 0} internal documents: ${healthData.processed_files?.join(', ') || 'None'}. You can now ask questions about FCA regulations!`,
+          timestamp: new Date()
+        }]);
+      } else if (internalDocsData.total_files > 0) {
+        // Internal documents exist but need to be loaded
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          type: 'system',
+          content: `📁 Found ${internalDocsData.total_files} internal documents. Loading them now...`,
+          timestamp: new Date()
+        }]);
+        
+        await loadInternalDocuments();
+      } else {
+        // No internal documents found
+        setSystemStatus('no_docs');
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          type: 'system',
+          content: '📂 No internal documents found. Please upload a PDF to get started, or contact Benstrong290@gmail.com to add documents to the internal_documents directory.',
           timestamp: new Date()
         }]);
       }
     } catch (error) {
-      // When no default document - this is normal!
-      setSystemStatus('initialized'); // Set to initialized anyway
+      setSystemStatus('error');
       setMessages(prev => [...prev, {
         id: Date.now(),
-        type: 'system',
-        content: '📁 Ready! Upload a PDF to get started.',
+        type: 'error',
+        content: `❌ Error initializing system: ${error.message}`,
         timestamp: new Date()
       }]);
     }
   };
 
-  const checkSystemHealth = async () => {
+  const loadInternalDocuments = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/health`);
+      const response = await fetch(`${API_BASE_URL}/initialize-default`, {
+        method: 'POST',
+      });
+      
       const data = await response.json();
-      if (data.vectorstore_initialized && data.qa_chain_initialized) {
-        setSystemStatus('initialized');
+      
+      if (response.ok) {
+        setSystemStatus('ready');
+        setInternalDocsLoaded(true);
+        setUploadedFiles(data.documents || [data.filename]);
+        
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          type: 'system',
+          content: `✅ Successfully loaded internal documents: ${(data.documents || [data.filename]).join(', ')}. System is now ready for questions!`,
+          timestamp: new Date()
+        }]);
       } else {
-        setSystemStatus('not_initialized');
+        throw new Error(data.detail || 'Failed to load internal documents');
       }
     } catch (error) {
-      setSystemStatus('error');
-      console.error('Health check failed:', error);
+      setSystemStatus('no_docs');
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        type: 'system',
+        content: `⚠️ Could not load internal documents: ${error.message}. You can still upload your own PDFs.`,
+        timestamp: new Date()
+      }]);
+    }
+  };
+
+  const reloadInternalDocuments = async () => {
+    setIsReloading(true);
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/reload-internal-documents`, {
+        method: 'POST',
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setSystemStatus('ready');
+        setInternalDocsLoaded(true);
+        setUploadedFiles(data.documents_loaded || []);
+        
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          type: 'system',
+          content: `🔄 Successfully reloaded ${data.total_documents} internal documents: ${data.documents_loaded.join(', ')}`,
+          timestamp: new Date()
+        }]);
+      } else {
+        throw new Error(data.detail || 'Failed to reload internal documents');
+      }
+    } catch (error) {
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        type: 'error',
+        content: `❌ Error reloading documents: ${error.message}`,
+        timestamp: new Date()
+      }]);
+    } finally {
+      setIsReloading(false);
     }
   };
 
@@ -92,7 +176,6 @@ const FCAHandbookChat = () => {
     }
 
     setIsUploading(true);
-    setUploadedFile(file.name);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -106,11 +189,12 @@ const FCAHandbookChat = () => {
       const data = await response.json();
       
       if (response.ok) {
-        setSystemStatus('initialized');
+        setSystemStatus('ready');
+        setUploadedFiles(data.all_documents || []);
         setMessages(prev => [...prev, {
           id: Date.now(),
           type: 'system',
-          content: `✅ Successfully uploaded and processed "${file.name}". This document has been added to the knowledge base alongside the FCA handbook. You can now ask questions about both documents.`,
+          content: `✅ Successfully uploaded "${file.name}". This document has been added to the knowledge base${internalDocsLoaded ? ' alongside the internal documents' : ''}. Total documents: ${data.total_documents}`,
           timestamp: new Date()
         }]);
       } else {
@@ -123,7 +207,6 @@ const FCAHandbookChat = () => {
         content: `❌ Error uploading file: ${error.message}`,
         timestamp: new Date()
       }]);
-      setSystemStatus('error');
     } finally {
       setIsUploading(false);
     }
@@ -132,11 +215,11 @@ const FCAHandbookChat = () => {
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || isLoading) return;
     
-    if (systemStatus !== 'initialized') {
+    if (systemStatus !== 'ready') {
       setMessages(prev => [...prev, {
         id: Date.now(),
         type: 'error',
-        content: '⚠️ System not ready. Please wait for the FCA handbook to load, or upload a document to get started.',
+        content: '⚠️ System not ready. Please wait for documents to load or upload a document to get started.',
         timestamp: new Date()
       }]);
       return;
@@ -197,8 +280,9 @@ const FCAHandbookChat = () => {
 
   const getStatusColor = () => {
     switch (systemStatus) {
-      case 'initialized': return 'text-green-500';
-      case 'not_initialized': return 'text-yellow-500';
+      case 'ready': return 'text-green-500';
+      case 'loading': return 'text-yellow-500';
+      case 'no_docs': return 'text-orange-500';
       case 'error': return 'text-red-500';
       default: return 'text-gray-500';
     }
@@ -206,11 +290,11 @@ const FCAHandbookChat = () => {
 
   const getStatusText = () => {
     switch (systemStatus) {
-      case 'initialized': return 'Document Ready';
-      case 'ready_for_upload': return 'Ready - Upload PDF';
-      case 'not_initialized': return 'Loading...';
+      case 'ready': return `Ready (${uploadedFiles.length} docs)`;
+      case 'loading': return 'Loading Documents...';
+      case 'no_docs': return 'No Documents - Upload Required';
       case 'error': return 'Connection Error';
-      default: return 'Loading...';
+      default: return 'Initializing...';
     }
   };
 
@@ -252,7 +336,7 @@ const FCAHandbookChat = () => {
             {!isUser && (
               <div className="flex items-center mb-2">
                 <span className="text-sm font-semibold">
-                  {isSystem ? 'System' : isError ? 'Error' : 'Cius FCA Assistant'}
+                  {isSystem ? 'System' : isError ? 'Error' : 'FCA Assistant'}
                 </span>
                 <span className="text-xs opacity-70 ml-2">
                   {message.timestamp.toLocaleTimeString()}
@@ -269,6 +353,11 @@ const FCAHandbookChat = () => {
                   {message.sources.map((source, index) => (
                     <div key={index} className="bg-white p-3 rounded-lg border-l-4 border-indigo-400">
                       <div className="font-medium text-indigo-700 text-sm">
+                        {source.metadata?.source_file && (
+                          <span className="bg-indigo-100 px-2 py-1 rounded text-xs mr-2">
+                            {source.metadata.source_file}
+                          </span>
+                        )}
                         Page {source.metadata?.page || 'Unknown'}
                       </div>
                       <div className="text-gray-600 text-sm mt-1 italic">
@@ -294,21 +383,38 @@ const FCAHandbookChat = () => {
             <div className="flex items-center">
               <FileText className="w-8 h-8 text-blue-600 mr-3" />
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Cius' FCA Regulations Chatbot</h1>
-                <p className="text-sm text-gray-600">Ask questions about FCA regulations and upload additional documents</p>
+                <h1 className="text-2xl font-bold text-gray-900">FCA Regulations Chatbot</h1>
+                <p className="text-sm text-gray-600">Ask questions about FCA regulations - internal documents loaded automatically</p>
               </div>
             </div>
             <div className="flex items-center space-x-6">
               {/* Status Indicator */}
               <div className="flex items-center">
                 <div className={`w-3 h-3 rounded-full mr-2 ${
-                  systemStatus === 'initialized' ? 'bg-green-500' : 
-                  systemStatus === 'error' ? 'bg-red-500' : 'bg-yellow-500'
+                  systemStatus === 'ready' ? 'bg-green-500' : 
+                  systemStatus === 'error' ? 'bg-red-500' : 
+                  systemStatus === 'no_docs' ? 'bg-orange-500' : 'bg-yellow-500'
                 }`}></div>
                 <span className={`text-sm font-medium ${getStatusColor()}`}>
                   {getStatusText()}
                 </span>
               </div>
+
+              {/* Reload Internal Documents Button */}
+              {internalDocsLoaded && (
+                <button
+                  onClick={reloadInternalDocuments}
+                  disabled={isReloading}
+                  className="flex items-center px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 transition-colors shadow-sm text-sm"
+                >
+                  {isReloading ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                  )}
+                  {isReloading ? 'Reloading...' : 'Reload Docs'}
+                </button>
+              )}
               
               {/* Upload Button */}
               <div className="flex items-center space-x-2">
@@ -345,8 +451,8 @@ const FCAHandbookChat = () => {
             {messages.length === 0 ? (
               <div className="text-center py-12">
                 <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-900 mb-2">Welcome to Cius' FCA Assistant</h3>
-                <p className="text-gray-500">FCA handbook is loading automatically. You can also upload additional documents for analysis.</p>
+                <h3 className="text-lg font-medium text-gray-900 mb-2">Welcome to FCA Assistant</h3>
+                <p className="text-gray-500">Initializing system and loading internal documents...</p>
               </div>
             ) : (
               <div className="space-y-1">
@@ -357,7 +463,7 @@ const FCAHandbookChat = () => {
                   <div className="flex justify-start mb-6">
                     <div className="flex items-center bg-gray-100 px-6 py-4 rounded-2xl">
                       <Loader2 className="w-5 h-5 mr-3 animate-spin text-blue-600" />
-                      <span className="text-gray-600">Analyzing document and generating response...</span>
+                      <span className="text-gray-600">Analyzing documents and generating response...</span>
                     </div>
                   </div>
                 )}
@@ -376,28 +482,33 @@ const FCAHandbookChat = () => {
                   value={inputMessage}
                   onChange={(e) => setInputMessage(e.target.value)}
                   onKeyPress={handleKeyPress}
-                  placeholder={systemStatus === 'initialized' 
+                  placeholder={systemStatus === 'ready' 
                     ? "Ask me about FCA regulations, compliance requirements, or your uploaded documents..." 
-                    : "FCA handbook is loading, please wait..."
+                    : systemStatus === 'loading'
+                      ? "Loading documents, please wait..."
+                      : "Upload a PDF or wait for internal documents to load..."
                   }
                   className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-all"
                   rows="3"
-                  disabled={systemStatus !== 'initialized'}
+                  disabled={systemStatus !== 'ready'}
                 />
               </div>
               <button
                 onClick={handleSendMessage}
-                disabled={isLoading || !inputMessage.trim() || systemStatus !== 'initialized'}
+                disabled={isLoading || !inputMessage.trim() || systemStatus !== 'ready'}
                 className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm"
               >
                 <Send className="w-5 h-5" />
               </button>
             </div>
             
-            {uploadedFile && (
+            {uploadedFiles.length > 0 && (
               <div className="mt-3 flex items-center text-sm text-gray-600">
                 <FileText className="w-4 h-4 mr-2" />
-                <span>Document loaded: {uploadedFile}</span>
+                <span>
+                  Documents loaded: {uploadedFiles.join(', ')}
+                  {internalDocsLoaded && ' (includes internal documents)'}
+                </span>
               </div>
             )}
           </div>
