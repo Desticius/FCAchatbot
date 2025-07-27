@@ -38,19 +38,29 @@ const FCAHandbookChat = () => {
       content: '🏛️ FCA Regulations Chatbot! Initializing system and loading documents...',
       timestamp: new Date()
     }]);
-
-    // Check system health and internal documents status
+  
     try {
-      const [healthResponse, internalDocsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/health`),
-        fetch(`${API_BASE_URL}/internal-documents-status`)
-      ]);
-
+      // First, just check health with better error handling
+      console.log('Checking backend health...');
+      
+      const healthResponse = await fetch(`${API_BASE_URL}/health`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        mode: 'cors',
+      });
+  
+      if (!healthResponse.ok) {
+        throw new Error(`Health check failed: ${healthResponse.status} ${healthResponse.statusText}`);
+      }
+  
       const healthData = await healthResponse.json();
-      const internalDocsData = await internalDocsResponse.json();
-
+      console.log('Health data received:', healthData);
+  
+      // Check if system is already ready
       if (healthData.internal_docs_loaded && healthData.vectorstore_initialized) {
-        // Internal documents are already loaded
         setSystemStatus('ready');
         setInternalDocsLoaded(true);
         setUploadedFiles(healthData.processed_files || []);
@@ -61,12 +71,34 @@ const FCAHandbookChat = () => {
           content: `✅ System ready! Loaded ${healthData.processed_files?.length || 0} internal documents: ${healthData.processed_files?.join(', ') || 'None'}. You can now ask questions about FCA regulations!`,
           timestamp: new Date()
         }]);
-      } else if (internalDocsData.total_files > 0) {
+        return;
+      }
+  
+      // If not ready, check for internal documents separately
+      console.log('Checking internal documents status...');
+      
+      const internalDocsResponse = await fetch(`${API_BASE_URL}/internal-documents-status`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        mode: 'cors',
+      });
+  
+      if (!internalDocsResponse.ok) {
+        throw new Error(`Internal docs check failed: ${internalDocsResponse.status} ${internalDocsResponse.statusText}`);
+      }
+  
+      const internalDocsData = await internalDocsResponse.json();
+      console.log('Internal docs data:', internalDocsData);
+  
+      if (internalDocsData.total_files > 0) {
         // Internal documents exist but need to be loaded
         setMessages(prev => [...prev, {
           id: Date.now(),
           type: 'system',
-          content: `📁 Found ${internalDocsData.total_files} internal documents. Loading them now...`,
+          content: `📁 Found ${internalDocsData.total_files} internal documents: ${internalDocsData.pdf_files_found.join(', ')}. Loading them now...`,
           timestamp: new Date()
         }]);
         
@@ -81,12 +113,28 @@ const FCAHandbookChat = () => {
           timestamp: new Date()
         }]);
       }
+  
     } catch (error) {
+      console.error('Detailed initialization error:', error);
       setSystemStatus('error');
+      
+      // More specific error messages
+      let errorMessage = '❌ Error initializing system: ';
+      
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        errorMessage += 'Network connection failed. Please check your internet connection and try again.';
+      } else if (error.message.includes('CORS')) {
+        errorMessage += 'Cross-origin request blocked. Please contact support.';
+      } else if (error.message.includes('timeout')) {
+        errorMessage += 'Request timed out. The server may be starting up, please try again in a moment.';
+      } else {
+        errorMessage += error.message;
+      }
+      
       setMessages(prev => [...prev, {
         id: Date.now(),
         type: 'error',
-        content: `❌ Error initializing system: ${error.message}`,
+        content: errorMessage + '\n\nTry refreshing the page or upload a PDF to continue.',
         timestamp: new Date()
       }]);
     }
@@ -94,32 +142,47 @@ const FCAHandbookChat = () => {
 
   const loadInternalDocuments = async () => {
     try {
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        type: 'system',
+        content: '⏳ Loading internal documents, this may take a moment...',
+        timestamp: new Date()
+      }]);
+  
       const response = await fetch(`${API_BASE_URL}/initialize-default`, {
         method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+        mode: 'cors',
       });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(errorData.detail || `Server error: ${response.status}`);
+      }
       
       const data = await response.json();
       
-      if (response.ok) {
-        setSystemStatus('ready');
-        setInternalDocsLoaded(true);
-        setUploadedFiles(data.documents || [data.filename]);
-        
-        setMessages(prev => [...prev, {
-          id: Date.now(),
-          type: 'system',
-          content: `✅ Successfully loaded internal documents: ${(data.documents || [data.filename]).join(', ')}. System is now ready for questions!`,
-          timestamp: new Date()
-        }]);
-      } else {
-        throw new Error(data.detail || 'Failed to load internal documents');
-      }
+      setSystemStatus('ready');
+      setInternalDocsLoaded(true);
+      setUploadedFiles(data.documents || [data.filename]);
+      
+      setMessages(prev => [...prev, {
+        id: Date.now(),
+        type: 'system',
+        content: `✅ Successfully loaded internal documents: ${(data.documents || [data.filename]).join(', ')}. System is now ready for questions!`,
+        timestamp: new Date()
+      }]);
+  
     } catch (error) {
+      console.error('Error loading internal documents:', error);
       setSystemStatus('no_docs');
       setMessages(prev => [...prev, {
         id: Date.now(),
         type: 'system',
-        content: `⚠️ Could not load internal documents: ${error.message}. You can still upload your own PDFs.`,
+        content: `⚠️ Could not load internal documents: ${error.message}. You can still upload your own PDFs to get started.`,
         timestamp: new Date()
       }]);
     }

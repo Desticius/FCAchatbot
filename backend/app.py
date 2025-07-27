@@ -29,7 +29,6 @@ if not os.getenv("OPENAI_API_KEY"):
 
 app = FastAPI(title="FCA Handbook RAG Chatbot", version="1.0.0")
 
-# Add CORS 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -39,9 +38,14 @@ app.add_middleware(
         "http://localhost:3000"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
+
+@app.options("/{full_path:path}")
+async def options_handler(full_path: str):
+    return {"message": "OK"}
 
 # Global variables
 vectorstore = None
