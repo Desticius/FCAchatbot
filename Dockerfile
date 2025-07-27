@@ -1,22 +1,27 @@
-FROM python:3.11-slim
+FROM python:3.9-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install Python packages
+# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
-# Expose port
+# Create internal_documents directory
+RUN mkdir -p internal_documents
+
+# Set environment variables
+ENV PORT=8080
+ENV PYTHONPATH=/app
+
+# Expose the port
 EXPOSE 8080
 
+# Health check
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
 # Run the application
-CMD ["sh", "-c", "cd backend && python app.py"]
+CMD ["python", "app.py"]
