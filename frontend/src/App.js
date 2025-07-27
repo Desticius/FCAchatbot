@@ -14,7 +14,7 @@ const FCAHandbookChat = () => {
   const fileInputRef = useRef(null);
 
   // temp localhost for development
-  const API_BASE_URL = 'http://localhost:8080';
+  const API_BASE_URL = 'https://fcachatbot-353782424888.europe-west1.run.app';
 
   useEffect(() => {
     initializeSystem();
