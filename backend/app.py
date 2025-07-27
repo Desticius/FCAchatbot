@@ -227,16 +227,38 @@ def create_qa_chain(vectorstore, model_name: str = "gpt-3.5-turbo", temperature:
 
 @app.on_event("startup")
 async def startup_event():
-    """Load internal documents automatically when the app starts"""
+    """Quick startup - defer document loading"""
+    logger.info("✅ Server started successfully - documents will load on first request")
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "server_ready": True,
+        "vectorstore_initialized": vectorstore is not None,
+        "qa_chain_initialized": qa_chain is not None,
+        "processed_files": processed_files,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "internal_docs_loaded": len(processed_files) > 0
+    }
+
+@app.post("/query", response_model=QueryResponse)
+async def query_document(request: QueryRequest):
     global qa_chain
     
-    logger.info("Starting up - loading internal documents...")
+    # Load documents if not already loaded
+    if qa_chain is None:
+        logger.info("Loading documents on first query...")
+        if load_internal_documents():
+            qa_chain = create_qa_chain(vectorstore)
+        else:
+            raise HTTPException(
+                status_code=400, 
+                detail="Please add documents to 'internal_documents' directory or upload a PDF first"
+            )
     
-    if load_internal_documents():
-        qa_chain = create_qa_chain(vectorstore)
-        logger.info("✅ Internal documents loaded successfully on startup")
-    else:
-        logger.info("⚠️ No internal documents found, system will wait for uploads")
+
 
 @app.get("/")
 async def root():
